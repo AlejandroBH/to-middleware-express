@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
+const Joi = require("joi");
 
 // Constantes de Rate Limit
 const requestCounts = {};
@@ -13,6 +14,32 @@ const WINDOW_API = 60 * 1000;
 
 // Crear aplicación
 const app = express();
+
+// Esquema para el login (POST /auth/login)
+const loginSchema = Joi.object({
+  email: Joi.string().email().required().messages({
+    "string.email": "El email debe ser una dirección de email válida.",
+    "any.required": "El campo email es obligatorio.",
+  }),
+  password: Joi.string().min(6).required().messages({
+    "string.min": "La contraseña debe tener al menos 6 caracteres.",
+    "any.required": "El campo password es obligatorio.",
+  }),
+});
+
+// Esquema para la creación de usuario (POST /api/usuarios)
+const crearUsuarioSchema = Joi.object({
+  nombre: Joi.string().min(3).max(100).required().messages({
+    "string.min": "El nombre debe tener al menos 3 caracteres.",
+    "string.max": "El nombre no debe exceder los 100 caracteres.",
+    "any.required": "El campo nombre es obligatorio.",
+  }),
+  email: Joi.string().email().required().messages({
+    "string.email": "El email debe ser una dirección de email válida.",
+    "any.required": "El campo email es obligatorio.",
+  }),
+  activo: Joi.boolean().optional(),
+});
 
 // Middleware de terceros
 app.use(helmet()); // Seguridad
@@ -84,11 +111,37 @@ function rateLimit(limit, windowMs) {
     }
 
     client.count++;
-    console.log(`[RateLimit] Petición para ${key}. Conteo: ${client.count}`);
 
     res.set("X-RateLimit-Limit", limit);
     res.set("X-RateLimit-Remaining", limit - client.count);
 
+    next();
+  };
+}
+
+// Middleware personalizado: validar el body de la petición contra un esquema Joi.
+function validarEsquema(schema) {
+  return (req, res, next) => {
+    const { error, value } = schema.validate(req.body, {
+      abortEarly: false,
+      allowUnknown: false,
+    });
+
+    if (error) {
+      const errores = error.details.map((detail) => ({
+        campo: detail.context.key,
+        mensaje: detail.message.replace(/['"]/g, ""),
+        tipo: detail.type,
+      }));
+
+      return res.status(400).json({
+        error: "Error de validación de datos",
+        detalles: errores,
+        timestamp: res.locals.timestamp,
+      });
+    }
+
+    req.body = value;
     next();
   };
 }
@@ -217,7 +270,7 @@ app.get("/health", (req, res) => {
 app.post(
   "/auth/login",
   rateLimit(LIMIT_LOGIN, WINDOW_LOGIN),
-  validarCamposRequeridos(["email", "password"]),
+  validarEsquema(loginSchema),
   (req, res) => {
     const { email, password } = req.body;
 
@@ -256,7 +309,7 @@ app.post(
   rateLimit(LIMIT_API, WINDOW_API),
   validarAuth,
   validarPermisos("escribir"),
-  validarCamposRequeridos(["nombre", "email"]),
+  validarEsquema(crearUsuarioSchema),
   (req, res) => {
     const nuevoUsuario = {
       id: usuarios.length + 1,
