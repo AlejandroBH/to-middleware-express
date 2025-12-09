@@ -4,6 +4,13 @@ const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
 
+// Constantes de Rate Limit
+const requestCounts = {};
+const LIMIT_LOGIN = 5;
+const WINDOW_LOGIN = 60 * 1000;
+const LIMIT_API = 50;
+const WINDOW_API = 60 * 1000;
+
 // Crear aplicación
 const app = express();
 
@@ -38,6 +45,53 @@ app.use((req, res, next) => {
   res.locals.timestamp = new Date().toISOString();
   next();
 });
+
+// Middleware personalizado: Rate Limiting personalizado
+function rateLimit(limit, windowMs) {
+  return (req, res, next) => {
+    const key = `${req.url}-${req.ip}`;
+    const now = Date.now();
+
+    if (!requestCounts[key]) {
+      requestCounts[key] = {
+        count: 0,
+        lastReset: now,
+      };
+    }
+
+    const client = requestCounts[key];
+
+    if (now - client.lastReset > windowMs) {
+      client.count = 1;
+      client.lastReset = now;
+      return next();
+    }
+
+    if (client.count >= limit) {
+      const timeLeft = Math.ceil((client.lastReset + windowMs - now) / 1000);
+
+      res.set("X-RateLimit-Limit", limit);
+      res.set("X-RateLimit-Remaining", 0);
+      res.set("Retry-After", timeLeft);
+
+      return res.status(429).json({
+        error: "Demasiadas peticiones (Rate Limit)",
+        mensaje: `Has excedido el límite de ${limit} peticiones por ${
+          windowMs / 1000
+        } segundos. Intenta de nuevo en ${timeLeft} segundos.`,
+        timestamp: res.locals.timestamp,
+      });
+    }
+
+    client.count++;
+    console.log(`[RateLimit] Petición para ${key}. Conteo: ${client.count}`);
+
+    res.set("X-RateLimit-Limit", limit);
+    res.set("X-RateLimit-Remaining", limit - client.count);
+
+    next();
+  };
+}
 
 // Base de datos simulada
 let usuarios = [
@@ -162,6 +216,7 @@ app.get("/health", (req, res) => {
 // Simulación de login (retorna token fijo)
 app.post(
   "/auth/login",
+  rateLimit(LIMIT_LOGIN, WINDOW_LOGIN),
   validarCamposRequeridos(["email", "password"]),
   (req, res) => {
     const { email, password } = req.body;
@@ -183,16 +238,22 @@ app.post(
 );
 
 // Rutas protegidas - Usuarios
-app.get("/api/usuarios", validarAuth, (req, res) => {
-  res.json({
-    usuarios,
-    total: usuarios.length,
-    timestamp: res.locals.timestamp,
-  });
-});
+app.get(
+  "/api/usuarios",
+  rateLimit(LIMIT_API, WINDOW_API),
+  validarAuth,
+  (req, res) => {
+    res.json({
+      usuarios,
+      total: usuarios.length,
+      timestamp: res.locals.timestamp,
+    });
+  }
+);
 
 app.post(
   "/api/usuarios",
+  rateLimit(LIMIT_API, WINDOW_API),
   validarAuth,
   validarPermisos("escribir"),
   validarCamposRequeridos(["nombre", "email"]),
@@ -216,33 +277,39 @@ app.post(
 );
 
 // Rutas protegidas - Productos
-app.get("/api/productos", validarAuth, (req, res) => {
-  const { categoria, precio_min, precio_max } = req.query;
-  let resultados = [...productos];
+app.get(
+  "/api/productos",
+  rateLimit(LIMIT_API, WINDOW_API),
+  validarAuth,
+  (req, res) => {
+    const { categoria, precio_min, precio_max } = req.query;
+    let resultados = [...productos];
 
-  // Filtros
-  if (categoria) {
-    resultados = resultados.filter((p) => p.categoria === categoria);
+    // Filtros
+    if (categoria) {
+      resultados = resultados.filter((p) => p.categoria === categoria);
+    }
+
+    if (precio_min) {
+      resultados = resultados.filter((p) => p.precio >= parseFloat(precio_min));
+    }
+
+    if (precio_max) {
+      resultados = resultados.filter((p) => p.precio <= parseFloat(precio_max));
+    }
+
+    res.json({
+      productos: resultados,
+      total: resultados.length,
+      filtros: req.query,
+      timestamp: res.locals.timestamp,
+    });
   }
-
-  if (precio_min) {
-    resultados = resultados.filter((p) => p.precio >= parseFloat(precio_min));
-  }
-
-  if (precio_max) {
-    resultados = resultados.filter((p) => p.precio <= parseFloat(precio_max));
-  }
-
-  res.json({
-    productos: resultados,
-    total: resultados.length,
-    filtros: req.query,
-    timestamp: res.locals.timestamp,
-  });
-});
+);
 
 app.post(
   "/api/productos",
+  rateLimit(LIMIT_API, WINDOW_API),
   validarAuth,
   validarPermisos("escribir"),
   validarCamposRequeridos(["nombre", "precio", "categoria"]),
