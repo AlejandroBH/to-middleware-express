@@ -1,0 +1,23 @@
+{
+  "name": "middleware-express",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app-completa-middleware.js",
+  "scripts": {
+    "start": "node app-completa-middleware",
+    "dev": "nodemon app-completa-middleware"
+  },
+  "keywords": [],
+  "author": "Alejandro Barrera <alejandro91dark@hotmail.es>",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
