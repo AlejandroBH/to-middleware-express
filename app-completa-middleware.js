@@ -12,6 +12,10 @@ const WINDOW_LOGIN = 60 * 1000;
 const LIMIT_API = 50;
 const WINDOW_API = 60 * 1000;
 
+// Constantes de Caché
+const cache = {};
+const CACHE_TTL = 30 * 1000;
+
 // Crear aplicación
 const app = express();
 
@@ -144,6 +148,47 @@ function validarEsquema(schema) {
     req.body = value;
     next();
   };
+}
+
+// Middleware personalizado: Caché en memoria para peticiones GET
+function cacheResponse(req, res, next) {
+  if (req.method !== "GET") {
+    return next();
+  }
+
+  const key = req.originalUrl || req.url;
+  const now = Date.now();
+  const cachedItem = cache[key];
+
+  if (cachedItem && now - cachedItem.timestamp < CACHE_TTL) {
+    console.log(`[${new Date().toISOString()}] Caché HIT: ${key}`);
+
+    res.set("X-Cache-Status", "HIT");
+    res.set("Cache-Control", `public, max-age=${CACHE_TTL / 1000}`);
+
+    return res.json(cachedItem.data);
+  }
+
+  console.log(`[${new Date().toISOString()}] Caché MISS: ${key}`);
+  res.set("X-Cache-Status", "MISS");
+
+  const originalJson = res.json;
+
+  res.json = function (body) {
+    if (res.statusCode === 200) {
+      cache[key] = {
+        timestamp: Date.now(),
+        data: body,
+      };
+
+      console.log(`[${new Date().toISOString()}] Caché SET: ${key}`);
+      res.set("Cache-Control", `public, max-age=${CACHE_TTL / 1000}`);
+    }
+
+    originalJson.call(this, body);
+  };
+
+  next();
 }
 
 // Base de datos simulada
@@ -295,6 +340,7 @@ app.get(
   "/api/usuarios",
   rateLimit(LIMIT_API, WINDOW_API),
   validarAuth,
+  cacheResponse,
   (req, res) => {
     res.json({
       usuarios,
@@ -334,6 +380,7 @@ app.get(
   "/api/productos",
   rateLimit(LIMIT_API, WINDOW_API),
   validarAuth,
+  cacheResponse,
   (req, res) => {
     const { categoria, precio_min, precio_max } = req.query;
     let resultados = [...productos];
