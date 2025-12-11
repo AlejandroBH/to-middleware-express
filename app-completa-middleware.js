@@ -5,6 +5,42 @@ const helmet = require("helmet");
 const compression = require("compression");
 const Joi = require("joi");
 
+// Diccionario de Traducciones para mensajes de error
+const i18nMessages = {
+  es: {
+    E400_INVALID_JSON: "JSON inválido en el body de la petición",
+    E404_NOT_FOUND: "Ruta no encontrada",
+    E401_AUTH_REQUIRED: "Token de autenticación requerido",
+    E401_INVALID_TOKEN: "Token inválido",
+    E401_INVALID_CREDENTIALS: "Credenciales inválidas",
+    E403_INSUFFICIENT_PERMISSIONS: "Permisos insuficientes",
+    E429_RATE_LIMIT: "Demasiadas peticiones (Rate Limit)",
+    E500_INTERNAL: "Error interno del servidor",
+    E400_MISSING_FIELDS: "Campos requeridos faltantes",
+
+    M429_RATE_LIMIT_EXCEEDED: (limit, windowMs, timeLeft) =>
+      `Has excedido el límite de ${limit} peticiones por ${
+        windowMs / 1000
+      } segundos. Intenta de nuevo en ${timeLeft} segundos.`,
+  },
+  en: {
+    E400_INVALID_JSON: "Invalid JSON in the request body",
+    E404_NOT_FOUND: "Route not found",
+    E401_AUTH_REQUIRED: "Authentication token required",
+    E401_INVALID_TOKEN: "Invalid token",
+    E401_INVALID_CREDENTIALS: "Invalid credentials",
+    E403_INSUFFICIENT_PERMISSIONS: "Insufficient permissions",
+    E429_RATE_LIMIT: "Too Many Requests (Rate Limit)",
+    E500_INTERNAL: "Internal Server Error",
+    E400_MISSING_FIELDS: "Missing required fields",
+
+    M429_RATE_LIMIT_EXCEEDED: (limit, windowMs, timeLeft) =>
+      `You have exceeded the limit of ${limit} requests per ${
+        windowMs / 1000
+      } seconds. Try again in ${timeLeft} seconds.`,
+  },
+};
+
 // Constantes de Rate Limit
 const requestCounts = {};
 const LIMIT_LOGIN = 5;
@@ -15,6 +51,9 @@ const WINDOW_API = 60 * 1000;
 // Constantes de Caché
 const cache = {};
 const CACHE_TTL = 30 * 1000;
+
+// Idioma por defecto
+const DEFAULT_LANGUAGE = "en";
 
 // Crear aplicación
 const app = express();
@@ -51,6 +90,7 @@ app.use(cors()); // CORS
 app.use(compression()); // Compresión
 app.use(express.json({ limit: "10mb" })); // Parsear JSON
 app.use(express.urlencoded({ extended: true })); // Parsear formularios
+app.use(i18nMiddleware); // Internacionalización (i18n)
 
 // Middleware personalizado: Logger detallado
 app.use((req, res, next) => {
@@ -106,10 +146,13 @@ function rateLimit(limit, windowMs) {
       res.set("Retry-After", timeLeft);
 
       return res.status(429).json({
-        error: "Demasiadas peticiones (Rate Limit)",
-        mensaje: `Has excedido el límite de ${limit} peticiones por ${
-          windowMs / 1000
-        } segundos. Intenta de nuevo en ${timeLeft} segundos.`,
+        error: res.locals.t("E429_RATE_LIMIT"),
+        mensaje: res.locals.t(
+          "M429_RATE_LIMIT_EXCEEDED",
+          limit,
+          windowMs,
+          timeLeft
+        ),
         timestamp: res.locals.timestamp,
       });
     }
@@ -191,6 +234,39 @@ function cacheResponse(req, res, next) {
   next();
 }
 
+// Middleware personalizado: internacionalización (i18n)
+function i18nMiddleware(req, res, next) {
+  const supportedLangs = Object.keys(i18nMessages);
+
+  let lang = req.acceptsLanguages(supportedLangs);
+
+  if (!lang) {
+    lang = DEFAULT_LANGUAGE;
+  }
+
+  const translations = i18nMessages[lang] || i18nMessages[DEFAULT_LANGUAGE];
+
+  if (!translations) {
+    console.error(
+      `ERROR: Las traducciones para el idioma ${lang} o ${DEFAULT_LANGUAGE} no existen en i18nMessages.`
+    );
+  }
+
+  res.locals.t = (key, ...args) => {
+    const message = translations[key];
+    if (typeof message === "function") {
+      return message(...args);
+    }
+    return message || key;
+  };
+
+  res.locals.lang = lang;
+
+  console.log(`[${new Date().toISOString()}] Idioma detectado: ${lang}`);
+
+  next();
+}
+
 // Base de datos simulada
 let usuarios = [
   { id: 1, nombre: "Ana García", email: "ana@example.com", activo: true },
@@ -215,7 +291,7 @@ function validarAuth(req, res, next) {
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
-      error: "Token de autenticación requerido",
+      error: res.locals.t("E401_AUTH_REQUIRED"),
       timestamp: res.locals.timestamp,
     });
   }
@@ -225,7 +301,7 @@ function validarAuth(req, res, next) {
   // Simular validación de token (en producción usar JWT)
   if (token !== "mi-token-secreto") {
     return res.status(401).json({
-      error: "Token inválido",
+      error: res.locals.t("E401_INVALID_TOKEN"),
       timestamp: res.locals.timestamp,
     });
   }
@@ -240,7 +316,7 @@ function validarPermisos(permisoRequerido) {
   return (req, res, next) => {
     if (!req.usuario) {
       return res.status(401).json({
-        error: "Usuario no autenticado",
+        error: res.locals.t("E401_AUTH_REQUIRED"),
         timestamp: res.locals.timestamp,
       });
     }
@@ -254,7 +330,7 @@ function validarPermisos(permisoRequerido) {
 
     if (!permisos.includes(permisoRequerido)) {
       return res.status(403).json({
-        error: "Permisos insuficientes",
+        error: res.locals.t("E403_INSUFFICIENT_PERMISSIONS"),
         timestamp: res.locals.timestamp,
       });
     }
@@ -276,7 +352,7 @@ function validarCamposRequeridos(campos) {
 
     if (faltantes.length > 0) {
       return res.status(400).json({
-        error: "Campos requeridos faltantes",
+        error: res.locals.t("E400_MISSING_FIELDS"),
         camposFaltantes: faltantes,
         timestamp: res.locals.timestamp,
       });
@@ -328,7 +404,7 @@ app.post(
       });
     } else {
       res.status(401).json({
-        error: "Credenciales inválidas",
+        error: res.locals.t("E401_INVALID_CREDENTIALS"),
         timestamp: res.locals.timestamp,
       });
     }
@@ -440,14 +516,14 @@ app.use((error, req, res, next) => {
   // Errores de JSON inválido
   if (error.type === "entity.parse.failed") {
     return res.status(400).json({
-      error: "JSON inválido en el body de la petición",
+      error: res.locals.t("E400_INVALID_JSON"),
       timestamp: res.locals.timestamp,
     });
   }
 
   // Error genérico
   res.status(500).json({
-    error: "Error interno del servidor",
+    error: res.locals.t("E500_INTERNAL"),
     mensaje:
       process.env.NODE_ENV === "development" ? error.message : "Algo salió mal",
     timestamp: res.locals.timestamp,
@@ -456,8 +532,10 @@ app.use((error, req, res, next) => {
 
 // Middleware 404
 app.use((req, res) => {
+  console.log(res.locals.t("E404_NOT_FOUND"));
+
   res.status(404).json({
-    error: "Ruta no encontrada",
+    error: res.locals.t("E404_NOT_FOUND"),
     metodo: req.method,
     ruta: req.url,
     timestamp: res.locals.timestamp,
